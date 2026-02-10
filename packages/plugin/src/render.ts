@@ -96,9 +96,17 @@ async function renderNode(
   parentAbsX: number,
   parentAbsY: number,
   parentWidth: number,
-  parentHeight: number
+  parentHeight: number,
+  preferredCoordinateMode: "relative" | "absolute" = "relative"
 ) {
-  const { x: localX, y: localY } = chooseLocalPosition(node, parentAbsX, parentAbsY, parentWidth, parentHeight);
+  const { x: localX, y: localY } = chooseLocalPosition(
+    node,
+    parentAbsX,
+    parentAbsY,
+    parentWidth,
+    parentHeight,
+    preferredCoordinateMode
+  );
 
   if (node.type === "rect") {
     const r = figma.createRectangle();
@@ -234,8 +242,10 @@ async function renderNode(
 
   parent.appendChild(f);
 
+  const childCoordinateMode = detectCoordinateMode(node.children ?? [], node.x, node.y, node.width, node.height);
+
   for (const c of node.children ?? []) {
-    await renderNode(c, f, loadFont, node.x, node.y, node.width, node.height);
+    await renderNode(c, f, loadFont, node.x, node.y, node.width, node.height, childCoordinateMode);
   }
 }
 
@@ -244,7 +254,8 @@ function chooseLocalPosition(
   parentAbsX: number,
   parentAbsY: number,
   parentWidth: number,
-  parentHeight: number
+  parentHeight: number,
+  preferredCoordinateMode: "relative" | "absolute"
 ): { x: number; y: number } {
   const relative = { x: node.x, y: node.y };
   const absolute = { x: node.x - parentAbsX, y: node.y - parentAbsY };
@@ -255,10 +266,31 @@ function chooseLocalPosition(
   if (absScore > relScore) return absolute;
   if (relScore > absScore) return relative;
 
+  if (preferredCoordinateMode === "absolute") return absolute;
+  if (preferredCoordinateMode === "relative") return relative;
+
   // tie-breaker: prefer absolute when parent is not at origin, which matches
   // most model outputs from screenshot coordinates.
   if (parentAbsX !== 0 || parentAbsY !== 0) return absolute;
   return relative;
+}
+
+function detectCoordinateMode(
+  nodes: DesignNode[],
+  parentAbsX: number,
+  parentAbsY: number,
+  parentWidth: number,
+  parentHeight: number
+): "relative" | "absolute" {
+  let relativeScore = 0;
+  let absoluteScore = 0;
+
+  for (const node of nodes) {
+    relativeScore += fitScore(node.x, node.y, node.width, node.height, parentWidth, parentHeight);
+    absoluteScore += fitScore(node.x - parentAbsX, node.y - parentAbsY, node.width, node.height, parentWidth, parentHeight);
+  }
+
+  return absoluteScore > relativeScore ? "absolute" : "relative";
 }
 
 function fitScore(x: number, y: number, width: number, height: number, parentWidth: number, parentHeight: number) {
