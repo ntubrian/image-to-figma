@@ -1,0 +1,12 @@
+{
+  "name": "Image -> Figma (Codex)",
+  "id": "1234567890123456789",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["https://placehold.co","http://localhost:8787"],
+    "reasoning": "Local development server for image-to-Figma spec generation."
+  }
+}

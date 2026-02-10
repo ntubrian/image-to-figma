@@ -1,0 +1,293 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 12px/1.4 Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 12px; }
+      .row { margin-bottom: 10px; }
+      input[type="text"] { width: 100%; padding: 6px; }
+      button { padding: 8px 10px; width: 100%; }
+      textarea { width: 100%; padding: 6px; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+      .log { white-space: pre-wrap; background: #f6f6f6; padding: 8px; border-radius: 6px; max-height: 200px; overflow: auto; }
+      .hint { color: #666; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <label>Backend URL</label>
+      <input id="backend" type="text" value="http://localhost:8787" />
+      <div class="hint">Your OpenAI key stays on the backend (don't put it in the plugin).</div>
+    </div>
+
+    <div class="row hint" id="status">Status: not initialized</div>
+
+    <div class="row">
+      <input id="file" type="file" accept="image/*" />
+    </div>
+
+    <div class="row">
+      <button id="go">Generate Figma layers</button>
+    </div>
+
+    <div class="row">
+      <label><input id="stream" type="checkbox" checked /> Stream model response</label>
+    </div>
+
+    <div class="row">
+      <button id="shot">Import screenshot only</button>
+    </div>
+
+    <div class="row">
+      <label>DesignSpec JSON</label>
+      <textarea id="spec" placeholder='{"canvas":{"width":1200,"height":800},"nodes":[]}'></textarea>
+      <div class="hint">Paste DesignSpec JSON from ChatGPT. If you also select an image, it will be used as background.</div>
+    </div>
+
+    <div class="row">
+      <button id="render-spec">Render from JSON</button>
+    </div>
+
+    <div class="row log" id="log"></div>
+
+    <script>
+      (function () {
+        function $(id) {
+          return document.getElementById(id);
+        }
+
+        var logEl = $("log");
+        function log(msg) {
+          if (!logEl) {
+            logEl = document.createElement("pre");
+            logEl.id = "log";
+            logEl.style.whiteSpace = "pre-wrap";
+            logEl.style.background = "#f6f6f6";
+            logEl.style.padding = "8px";
+            logEl.style.borderRadius = "6px";
+            logEl.style.maxHeight = "200px";
+            logEl.style.overflow = "auto";
+            document.body.appendChild(logEl);
+          }
+          logEl.textContent = (logEl.textContent || "") + msg + "\n";
+          try { console.log(msg); } catch (_) {}
+        }
+
+        var statusEl = $("status");
+        if (statusEl) {
+          statusEl.textContent = "Status: JS loaded at " + new Date().toLocaleTimeString();
+        }
+        log("UI loaded.");
+
+        window.addEventListener("error", function (e) {
+          log("Error: " + e.message);
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          var reason = e.reason && e.reason.message ? e.reason.message : String(e.reason);
+          log("Unhandled: " + reason);
+        });
+
+        function fileToDataUrl(file) {
+          return new Promise(function (resolve, reject) {
+            var r = new FileReader();
+            r.onload = function () { resolve(String(r.result)); };
+            r.onerror = function () { reject(r.error); };
+            r.readAsDataURL(file);
+          });
+        }
+
+        function dataUrlToBase64(dataUrl) {
+          var m = dataUrl.match(/^data:(image\/[^;]+);base64,(.*)$/);
+          if (!m) throw new Error("invalid data url");
+          return { mime: m[1], b64: m[2] };
+        }
+
+        function getImageSizeFromDataUrl(dataUrl) {
+          return new Promise(function (resolve, reject) {
+            var img = new Image();
+            img.onload = function () { resolve({ width: img.naturalWidth, height: img.naturalHeight }); };
+            img.onerror = function () { reject(new Error("failed to load image")); };
+            img.src = dataUrl;
+          });
+        }
+
+        function runGenerate() {
+          var backendInput = document.getElementById("backend");
+          var fileInput = document.getElementById("file");
+          var streamInput = document.getElementById("stream");
+          if (!backendInput || !fileInput) {
+            log("UI elements missing (backend/file).");
+            return Promise.resolve();
+          }
+          var backend = backendInput.value.trim();
+          var useStream = streamInput ? streamInput.checked : false;
+          var file = fileInput.files && fileInput.files[0];
+          if (!file) {
+            log("Pick an image first.");
+            return Promise.resolve();
+          }
+
+          log("Reading image...");
+          return fileToDataUrl(file).then(function (dataUrl) {
+            return getImageSizeFromDataUrl(dataUrl).then(function (size) {
+              var parsed = dataUrlToBase64(dataUrl);
+              log("Image mime: " + parsed.mime + ", bytes: " + parsed.b64.length);
+              var url = backend.replace(/\/$/, "") + "/v1/figma-spec" + (useStream ? "?stream=1" : "");
+              log("Calling backend: " + url);
+              return fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-stream": useStream ? "1" : "0" },
+                body: JSON.stringify({ imageDataUrl: dataUrl, width: size.width, height: size.height })
+              }).then(function (res) {
+                if (!res.ok) {
+                  return res.text().then(function (txt) {
+                    log("Backend error (" + res.status + "): " + txt);
+                  });
+                }
+                if (!useStream || !res.body || !window.ReadableStream) {
+                  return res.json().then(function (spec) {
+                    log("Spec received. Sending to plugin renderer...");
+                    parent.postMessage(
+                      { pluginMessage: { type: "RENDER", spec: spec, imageBytesBase64: parsed.b64, imageMime: parsed.mime } },
+                      "*"
+                    );
+                  });
+                }
+                var reader = res.body.getReader();
+                var decoder = new TextDecoder();
+                var buffer = "";
+                function handleLine(line) {
+                  try {
+                    var obj = JSON.parse(line);
+                    if (obj.type === "delta") log(obj.text);
+                    if (obj.type === "error") log("Error: " + (obj.message || obj.error));
+                    if (obj.type === "spec") {
+                      log("Spec received. Sending to plugin renderer...");
+                      parent.postMessage(
+                        { pluginMessage: { type: "RENDER", spec: obj.spec, imageBytesBase64: parsed.b64, imageMime: parsed.mime } },
+                        "*"
+                      );
+                    }
+                  } catch (e) {
+                    log("Stream parse error: " + (e && e.message ? e.message : String(e)));
+                  }
+                }
+                function pump() {
+                  return reader.read().then(function (result) {
+                    if (result.done) return;
+                    buffer += decoder.decode(result.value, { stream: true });
+                    var idx;
+                    while ((idx = buffer.indexOf("\n")) >= 0) {
+                      var line = buffer.slice(0, idx).trim();
+                      buffer = buffer.slice(idx + 1);
+                      if (line) handleLine(line);
+                    }
+                    return pump();
+                  });
+                }
+                return pump();
+              });
+            });
+          }).catch(function (e) {
+            log("Error: " + (e && e.message ? e.message : String(e)));
+          });
+        }
+
+        function runScreenshotOnly() {
+          var fileInput = document.getElementById("file");
+          var file = fileInput && fileInput.files && fileInput.files[0];
+          if (!file) {
+            log("Pick an image first.");
+            return;
+          }
+          log("Importing screenshot only...");
+          fileToDataUrl(file).then(function (dataUrl) {
+            return getImageSizeFromDataUrl(dataUrl).then(function (size) {
+              var parsed = dataUrlToBase64(dataUrl);
+              log("Image mime: " + parsed.mime + ", bytes: " + parsed.b64.length);
+              parent.postMessage(
+                { pluginMessage: { type: "RENDER_SCREENSHOT", imageBytesBase64: parsed.b64, imageMime: parsed.mime } },
+                "*"
+              );
+              log("Screenshot imported (" + size.width + "x" + size.height + ").");
+            });
+          }).catch(function (e) {
+            log("Error: " + (e && e.message ? e.message : String(e)));
+          });
+        }
+
+        function runRenderSpec() {
+          var specInput = document.getElementById("spec");
+          if (!specInput || !specInput.value.trim()) {
+            log("Paste DesignSpec JSON first.");
+            return;
+          }
+          var specText = specInput.value.trim();
+          var spec;
+          try {
+            spec = JSON.parse(specText);
+          } catch (e) {
+            log("Invalid JSON: " + (e && e.message ? e.message : String(e)));
+            return;
+          }
+
+          var fileInput = document.getElementById("file");
+          var file = fileInput && fileInput.files && fileInput.files[0];
+          if (!file) {
+            parent.postMessage({ pluginMessage: { type: "RENDER_SPEC", spec: spec } }, "*");
+            log("Spec sent to renderer (no background).");
+            return;
+          }
+
+          log("Reading image...");
+          fileToDataUrl(file).then(function (dataUrl) {
+            return getImageSizeFromDataUrl(dataUrl).then(function (size) {
+              var parsed = dataUrlToBase64(dataUrl);
+              log("Image mime: " + parsed.mime + ", bytes: " + parsed.b64.length);
+              parent.postMessage(
+                {
+                  pluginMessage: {
+                    type: "RENDER_SPEC",
+                    spec: spec,
+                    imageBytesBase64: parsed.b64,
+                    imageMime: parsed.mime
+                  }
+                },
+                "*"
+              );
+              log("Spec sent with background (" + size.width + "x" + size.height + ").");
+            });
+          }).catch(function (e) {
+            log("Error: " + (e && e.message ? e.message : String(e)));
+          });
+        }
+
+        var goBtn = $("go");
+        if (goBtn) {
+          goBtn.onclick = function () { runGenerate(); };
+        } else {
+          log("Missing button: #go");
+        }
+
+        var shotBtn = $("shot");
+        if (shotBtn) {
+          shotBtn.onclick = function () { runScreenshotOnly(); };
+        } else {
+          log("Missing button: #shot");
+        }
+
+        var renderSpecBtn = $("render-spec");
+        if (renderSpecBtn) {
+          renderSpecBtn.onclick = function () { runRenderSpec(); };
+        } else {
+          log("Missing button: #render-spec");
+        }
+
+        window.onmessage = function (event) {
+          var msg = event && event.data && event.data.pluginMessage;
+          if (!msg) return;
+          if (msg.type === "LOG") log(msg.message);
+        };
+      })();
+    </script>
+  </body>
+</html>
