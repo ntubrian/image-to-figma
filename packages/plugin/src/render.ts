@@ -1,8 +1,6 @@
 import type { DesignNode, DesignSpec, RGBA } from "@image-to-figma/shared";
 
 type Screenshot = { base64: string; mime: string };
-type CoordinateMode = "absolute" | "relative";
-
 function normalizeScreenshot(screenshot?: Screenshot) {
   if (!screenshot) return null;
   const mime = (screenshot.mime || "").toLowerCase();
@@ -79,7 +77,7 @@ export async function renderToFigma(args: { spec: DesignSpec; screenshot?: Scree
   };
 
   for (const n of spec.nodes) {
-    await renderNode(n, overlay, loadFont, 0, 0, "absolute");
+    await renderNode(n, overlay, loadFont, 0, 0, root.width, root.height);
   }
 
   figma.currentPage.appendChild(root);
@@ -97,10 +95,10 @@ async function renderNode(
   loadFont: (family: string, style: string) => Promise<void>,
   parentAbsX: number,
   parentAbsY: number,
-  coordinateMode: CoordinateMode
+  parentWidth: number,
+  parentHeight: number
 ) {
-  const localX = coordinateMode === "absolute" ? node.x - parentAbsX : node.x;
-  const localY = coordinateMode === "absolute" ? node.y - parentAbsY : node.y;
+  const { x: localX, y: localY } = chooseLocalPosition(node, parentAbsX, parentAbsY, parentWidth, parentHeight);
 
   if (node.type === "rect") {
     const r = figma.createRectangle();
@@ -236,43 +234,41 @@ async function renderNode(
 
   parent.appendChild(f);
 
-  const childMode = inferChildrenCoordinateMode(node.children ?? [], node.x, node.y, node.width, node.height);
   for (const c of node.children ?? []) {
-    await renderNode(c, f, loadFont, node.x, node.y, childMode);
+    await renderNode(c, f, loadFont, node.x, node.y, node.width, node.height);
   }
 }
 
-function inferChildrenCoordinateMode(
-  children: DesignNode[],
+function chooseLocalPosition(
+  node: DesignNode,
   parentAbsX: number,
   parentAbsY: number,
   parentWidth: number,
   parentHeight: number
-): CoordinateMode {
-  let absWins = 0;
-  let relWins = 0;
+): { x: number; y: number } {
+  const relative = { x: node.x, y: node.y };
+  const absolute = { x: node.x - parentAbsX, y: node.y - parentAbsY };
 
-  for (const c of children) {
-    const relFits = fitsWithin(c.x, c.y, c.width, c.height, parentWidth, parentHeight);
-    const absFits = fitsWithin(c.x - parentAbsX, c.y - parentAbsY, c.width, c.height, parentWidth, parentHeight);
+  const relScore = fitScore(relative.x, relative.y, node.width, node.height, parentWidth, parentHeight);
+  const absScore = fitScore(absolute.x, absolute.y, node.width, node.height, parentWidth, parentHeight);
 
-    if (absFits && !relFits) absWins += 1;
-    if (relFits && !absFits) relWins += 1;
-  }
+  if (absScore > relScore) return absolute;
+  if (relScore > absScore) return relative;
 
-  // Prefer parent-relative coordinates on ties to avoid over-shifting
-  // in mixed/ambiguous model output.
-  return absWins > relWins ? "absolute" : "relative";
+  // tie-breaker: prefer absolute when parent is not at origin, which matches
+  // most model outputs from screenshot coordinates.
+  if (parentAbsX !== 0 || parentAbsY !== 0) return absolute;
+  return relative;
 }
 
-function fitsWithin(x: number, y: number, width: number, height: number, parentWidth: number, parentHeight: number) {
+function fitScore(x: number, y: number, width: number, height: number, parentWidth: number, parentHeight: number) {
   const tol = 1;
-  return (
-    x >= -tol &&
-    y >= -tol &&
-    x + width <= parentWidth + tol &&
-    y + height <= parentHeight + tol
-  );
+  let score = 0;
+  if (x >= -tol) score += 1;
+  if (y >= -tol) score += 1;
+  if (x + width <= parentWidth + tol) score += 1;
+  if (y + height <= parentHeight + tol) score += 1;
+  return score;
 }
 
 function solid(c: RGBA): SolidPaint {
