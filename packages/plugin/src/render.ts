@@ -1,6 +1,7 @@
 import type { DesignNode, DesignSpec, RGBA } from "@image-to-figma/shared";
 
 type Screenshot = { base64: string; mime: string };
+type CoordinateMode = "absolute" | "relative";
 
 function normalizeScreenshot(screenshot?: Screenshot) {
   if (!screenshot) return null;
@@ -77,8 +78,9 @@ export async function renderToFigma(args: { spec: DesignSpec; screenshot?: Scree
     return fontCache.get(key)!;
   };
 
+  const rootMode = inferChildrenCoordinateMode(spec.nodes, 0, 0, root.width, root.height);
   for (const n of spec.nodes) {
-    await renderNode(n, overlay, loadFont);
+    await renderNode(n, overlay, loadFont, 0, 0, rootMode);
   }
 
   figma.currentPage.appendChild(root);
@@ -93,13 +95,19 @@ export async function renderSpecOnly(args: { spec: DesignSpec; screenshot?: Scre
 async function renderNode(
   node: DesignNode,
   parent: FrameNode | ComponentNode | InstanceNode,
-  loadFont: (family: string, style: string) => Promise<void>
+  loadFont: (family: string, style: string) => Promise<void>,
+  parentAbsX: number,
+  parentAbsY: number,
+  coordinateMode: CoordinateMode
 ) {
+  const localX = coordinateMode === "absolute" ? node.x - parentAbsX : node.x;
+  const localY = coordinateMode === "absolute" ? node.y - parentAbsY : node.y;
+
   if (node.type === "rect") {
     const r = figma.createRectangle();
     r.name = node.name || "Rect";
-    r.x = node.x;
-    r.y = node.y;
+    r.x = localX;
+    r.y = localY;
     r.resize(node.width, node.height);
 
     if (node.cornerRadius != null) r.cornerRadius = node.cornerRadius;
@@ -122,8 +130,8 @@ async function renderNode(
   if (node.type === "text") {
     const t = figma.createText();
     t.name = node.name || "Text";
-    t.x = node.x;
-    t.y = node.y;
+    t.x = localX;
+    t.y = localY;
 
     const family = node.fontFamily || "Inter";
     const style = node.fontStyle || "Regular";
@@ -150,8 +158,8 @@ async function renderNode(
   if (node.type === "ellipse") {
     const e = figma.createEllipse();
     e.name = node.name || "Ellipse";
-    e.x = node.x;
-    e.y = node.y;
+    e.x = localX;
+    e.y = localY;
     e.resize(node.width, node.height);
 
     if (node.fill) e.fills = [solid(node.fill)];
@@ -172,8 +180,8 @@ async function renderNode(
   if (node.type === "image") {
     const r = figma.createRectangle();
     r.name = node.name || "Image";
-    r.x = node.x;
-    r.y = node.y;
+    r.x = localX;
+    r.y = localY;
     r.resize(node.width, node.height);
     if (node.cornerRadius != null) r.cornerRadius = node.cornerRadius;
 
@@ -195,8 +203,8 @@ async function renderNode(
 
   const f = figma.createFrame();
   f.name = node.name || "Frame";
-  f.x = node.x;
-  f.y = node.y;
+  f.x = localX;
+  f.y = localY;
   f.resize(node.width, node.height);
 
   if (node.fill) f.fills = [solid(node.fill)];
@@ -229,9 +237,41 @@ async function renderNode(
 
   parent.appendChild(f);
 
+  const childMode = inferChildrenCoordinateMode(node.children ?? [], node.x, node.y, node.width, node.height);
   for (const c of node.children ?? []) {
-    await renderNode(c, f, loadFont);
+    await renderNode(c, f, loadFont, node.x, node.y, childMode);
   }
+}
+
+function inferChildrenCoordinateMode(
+  children: DesignNode[],
+  parentAbsX: number,
+  parentAbsY: number,
+  parentWidth: number,
+  parentHeight: number
+): CoordinateMode {
+  let absWins = 0;
+  let relWins = 0;
+
+  for (const c of children) {
+    const relFits = fitsWithin(c.x, c.y, c.width, c.height, parentWidth, parentHeight);
+    const absFits = fitsWithin(c.x - parentAbsX, c.y - parentAbsY, c.width, c.height, parentWidth, parentHeight);
+
+    if (absFits && !relFits) absWins += 1;
+    if (relFits && !absFits) relWins += 1;
+  }
+
+  return absWins >= relWins ? "absolute" : "relative";
+}
+
+function fitsWithin(x: number, y: number, width: number, height: number, parentWidth: number, parentHeight: number) {
+  const tol = 1;
+  return (
+    x >= -tol &&
+    y >= -tol &&
+    x + width <= parentWidth + tol &&
+    y + height <= parentHeight + tol
+  );
 }
 
 function solid(c: RGBA): SolidPaint {
