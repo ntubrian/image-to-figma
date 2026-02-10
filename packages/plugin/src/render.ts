@@ -115,7 +115,8 @@ async function renderNode(
     r.y = localY;
     r.resize(node.width, node.height);
 
-    if (node.cornerRadius != null) r.cornerRadius = node.cornerRadius;
+    const inferredRectRadius = inferPillRadius(node.width, node.height, Boolean(node.fill), node.cornerRadius);
+    if (inferredRectRadius != null) r.cornerRadius = inferredRectRadius;
 
     if (node.fill) r.fills = [solid(node.fill)];
     else r.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 }, opacity: 0.0 }];
@@ -222,7 +223,8 @@ async function renderNode(
     f.strokes = [];
   }
 
-  if (node.cornerRadius != null) f.cornerRadius = node.cornerRadius;
+  const inferredFrameRadius = inferPillRadius(node.width, node.height, Boolean(node.fill), node.cornerRadius);
+  if (inferredFrameRadius != null) f.cornerRadius = inferredFrameRadius;
   if (node.opacity != null) f.opacity = node.opacity;
 
   if (node.layoutMode && node.layoutMode !== "NONE") {
@@ -293,6 +295,13 @@ function detectCoordinateMode(
   return absoluteScore > relativeScore ? "absolute" : "relative";
 }
 
+function inferPillRadius(width: number, height: number, hasFill: boolean, explicitCornerRadius?: number): number | null {
+  if (explicitCornerRadius != null) return explicitCornerRadius;
+  if (!hasFill) return null;
+  // Heuristic for schedule/task pills that are commonly emitted without radius.
+  if (height <= 28 && width >= height * 1.6) return Math.floor(height / 2);
+  return null;
+}
 function fitScore(x: number, y: number, width: number, height: number, parentWidth: number, parentHeight: number) {
   const tol = 1;
   let score = 0;
