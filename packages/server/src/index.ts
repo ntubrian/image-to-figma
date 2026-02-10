@@ -51,6 +51,21 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const n = toNumber(value);
+    if (n != null) return n;
+  }
+  return null;
+}
+
+function firstColor(...values: unknown[]): any | undefined {
+  for (const value of values) {
+    if (value && typeof value === "object") return value;
+  }
+  return undefined;
+}
+
 function normalizeNode(input: any): any | null {
   if (!input || typeof input !== "object") return null;
   const type = input.type;
@@ -105,19 +120,28 @@ function normalizeNode(input: any): any | null {
   }
 
   if (type === "rect") {
-    if (input.fill) base.fill = input.fill;
-    if (input.stroke) base.stroke = input.stroke;
-    const sw = toNumber(input.strokeWidth);
+    const fill = firstColor(input.fill, input.backgroundColor, input.bgColor, input.color);
+    if (fill) base.fill = fill;
+
+    const stroke = firstColor(input.stroke, input.borderColor, input.outlineColor);
+    if (stroke) base.stroke = stroke;
+
+    const sw = firstNumber(input.strokeWidth, input.borderWidth, input.outlineWidth);
     if (sw != null) base.strokeWidth = sw;
-    const cr = toNumber(input.cornerRadius);
+
+    const cr = firstNumber(input.cornerRadius, input.borderRadius, input.radius);
     if (cr != null) base.cornerRadius = cr;
     return base;
   }
 
   if (type === "ellipse") {
-    if (input.fill) base.fill = input.fill;
-    if (input.stroke) base.stroke = input.stroke;
-    const sw = toNumber(input.strokeWidth);
+    const fill = firstColor(input.fill, input.backgroundColor, input.bgColor, input.color);
+    if (fill) base.fill = fill;
+
+    const stroke = firstColor(input.stroke, input.borderColor, input.outlineColor);
+    if (stroke) base.stroke = stroke;
+
+    const sw = firstNumber(input.strokeWidth, input.borderWidth, input.outlineWidth);
     if (sw != null) base.strokeWidth = sw;
     return base;
   }
@@ -158,11 +182,16 @@ function normalizeNode(input: any): any | null {
   }
   const itemSpacing = toNumber(input.itemSpacing);
   if (itemSpacing != null) base.itemSpacing = itemSpacing;
-  if (input.fill) base.fill = input.fill;
-  if (input.stroke) base.stroke = input.stroke;
-  const sw = toNumber(input.strokeWidth);
+  const frameFill = firstColor(input.fill, input.backgroundColor, input.bgColor, input.color);
+  if (frameFill) base.fill = frameFill;
+
+  const frameStroke = firstColor(input.stroke, input.borderColor, input.outlineColor);
+  if (frameStroke) base.stroke = frameStroke;
+
+  const sw = firstNumber(input.strokeWidth, input.borderWidth, input.outlineWidth);
   if (sw != null) base.strokeWidth = sw;
-  const cr = toNumber(input.cornerRadius);
+
+  const cr = firstNumber(input.cornerRadius, input.borderRadius, input.radius);
   if (cr != null) base.cornerRadius = cr;
   if (Array.isArray(input.children)) {
     base.children = input.children.map(normalizeNode).filter(Boolean);
@@ -202,6 +231,9 @@ app.post("/v1/figma-spec", async (req, res) => {
       "Return ONLY valid JSON. No markdown, no prose.",
       "Prefer fewer, higher-level nodes (<= 50).",
       "Use rectangles for backgrounds/sections/buttons; text nodes for visible labels.",
+      "Preserve table/grid details when present: include thin strokes for cell borders and separators.",
+      "Preserve corner radii for rounded controls/task bars (pills should keep rounded ends).",
+      "For children inside a frame, prefer coordinates local to that parent frame.",
       "If unsure, approximate."
     ].join("\n");
 
@@ -225,6 +257,7 @@ app.post("/v1/figma-spec", async (req, res) => {
     const user = [
       `Screenshot size: ${width}x${height}px.`,
       "Extract a reasonable layout.",
+      "Match visible alignment/order exactly (especially timeline headers and weekday columns).",
       "Do NOT include images besides basic rectangles/text (the plugin will place the screenshot as a background layer).",
       schemaExample
     ].join("\n");
