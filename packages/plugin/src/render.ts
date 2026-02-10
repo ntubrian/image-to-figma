@@ -302,7 +302,6 @@ function inferPillRadius(width: number, height: number, hasFill: boolean, explic
   if (height <= 28 && width >= height * 1.6) return Math.floor(height / 2);
   return null;
 }
-
 function fitScore(x: number, y: number, width: number, height: number, parentWidth: number, parentHeight: number) {
   const tol = 1;
   let score = 0;
