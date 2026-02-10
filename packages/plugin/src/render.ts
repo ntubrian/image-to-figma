@@ -78,9 +78,8 @@ export async function renderToFigma(args: { spec: DesignSpec; screenshot?: Scree
     return fontCache.get(key)!;
   };
 
-  const rootMode = inferChildrenCoordinateMode(spec.nodes, 0, 0, root.width, root.height);
   for (const n of spec.nodes) {
-    await renderNode(n, overlay, loadFont, 0, 0, rootMode);
+    await renderNode(n, overlay, loadFont, 0, 0, "absolute");
   }
 
   figma.currentPage.appendChild(root);
@@ -261,7 +260,9 @@ function inferChildrenCoordinateMode(
     if (relFits && !absFits) relWins += 1;
   }
 
-  return absWins >= relWins ? "absolute" : "relative";
+  // Prefer parent-relative coordinates on ties to avoid over-shifting
+  // in mixed/ambiguous model output.
+  return absWins > relWins ? "absolute" : "relative";
 }
 
 function fitsWithin(x: number, y: number, width: number, height: number, parentWidth: number, parentHeight: number) {
