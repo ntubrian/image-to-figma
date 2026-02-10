@@ -1,7 +1,6 @@
 import type { DesignNode, DesignSpec, RGBA } from "@image-to-figma/shared";
 
 type Screenshot = { base64: string; mime: string };
-
 function normalizeScreenshot(screenshot?: Screenshot) {
   if (!screenshot) return null;
   const mime = (screenshot.mime || "").toLowerCase();
@@ -78,7 +77,7 @@ export async function renderToFigma(args: { spec: DesignSpec; screenshot?: Scree
   };
 
   for (const n of spec.nodes) {
-    await renderNode(n, overlay, loadFont, 0, 0);
+    await renderNode(n, overlay, loadFont, 0, 0, root.width, root.height);
   }
 
   figma.currentPage.appendChild(root);
@@ -95,10 +94,11 @@ async function renderNode(
   parent: FrameNode | ComponentNode | InstanceNode,
   loadFont: (family: string, style: string) => Promise<void>,
   parentAbsX: number,
-  parentAbsY: number
+  parentAbsY: number,
+  parentWidth: number,
+  parentHeight: number
 ) {
-  const localX = node.x - parentAbsX;
-  const localY = node.y - parentAbsY;
+  const { x: localX, y: localY } = chooseLocalPosition(node, parentAbsX, parentAbsY, parentWidth, parentHeight);
 
   if (node.type === "rect") {
     const r = figma.createRectangle();
@@ -235,8 +235,40 @@ async function renderNode(
   parent.appendChild(f);
 
   for (const c of node.children ?? []) {
-    await renderNode(c, f, loadFont, node.x, node.y);
+    await renderNode(c, f, loadFont, node.x, node.y, node.width, node.height);
   }
+}
+
+function chooseLocalPosition(
+  node: DesignNode,
+  parentAbsX: number,
+  parentAbsY: number,
+  parentWidth: number,
+  parentHeight: number
+): { x: number; y: number } {
+  const relative = { x: node.x, y: node.y };
+  const absolute = { x: node.x - parentAbsX, y: node.y - parentAbsY };
+
+  const relScore = fitScore(relative.x, relative.y, node.width, node.height, parentWidth, parentHeight);
+  const absScore = fitScore(absolute.x, absolute.y, node.width, node.height, parentWidth, parentHeight);
+
+  if (absScore > relScore) return absolute;
+  if (relScore > absScore) return relative;
+
+  // tie-breaker: prefer absolute when parent is not at origin, which matches
+  // most model outputs from screenshot coordinates.
+  if (parentAbsX !== 0 || parentAbsY !== 0) return absolute;
+  return relative;
+}
+
+function fitScore(x: number, y: number, width: number, height: number, parentWidth: number, parentHeight: number) {
+  const tol = 1;
+  let score = 0;
+  if (x >= -tol) score += 1;
+  if (y >= -tol) score += 1;
+  if (x + width <= parentWidth + tol) score += 1;
+  if (y + height <= parentHeight + tol) score += 1;
+  return score;
 }
 
 function solid(c: RGBA): SolidPaint {
