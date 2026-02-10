@@ -181,6 +181,33 @@ Use this as a safe starter when prompting the model:
 
 ---
 
+
+## Troubleshooting: why generated Figma can look very different from source image
+
+If your generated JSON looks "detailed" but rendered Figma is simplified/misaligned, the common causes are:
+
+1. **Absolute vs nested coordinates**
+   - This project uses screenshot/canvas absolute coordinates in the schema.
+   - If a renderer treats nested frame children as parent-relative, child blocks shift and get clipped.
+
+2. **Unsupported text style keys from model output**
+   - Model often emits `fontWeight`, `color`, `textAlign`.
+   - Schema expects `fontStyle`, `fill`, `alignHorizontal`.
+   - Without normalization, text appears wrong (weight/color/alignment drift).
+
+3. **`image` nodes without image source**
+   - Schema requires `imageUrl` or `imageDataUrl` for `image` type.
+   - Missing source causes node removal at validation time.
+   - Prefer `rect` placeholders unless you really have a valid URL/data URL.
+
+### Recommended process improvements
+
+- During JSON prompt, explicitly require **absolute coordinates for all nodes**, including children.
+- Force a strict key whitelist for text nodes:
+  - `text`, `fontFamily`, `fontStyle`, `fontSize`, `fill`, `alignHorizontal`
+- For thumbnails/icons, ask model to default to `rect` placeholders unless image source is available.
+- Add a preflight instruction: “If a key is not in schema, convert it to nearest supported key.”
+
 ## Local run
 
 ```bash
