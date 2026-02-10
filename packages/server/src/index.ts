@@ -77,10 +77,30 @@ function normalizeNode(input: any): any | null {
     base.text = typeof input.text === "string" ? input.text : "";
     if (typeof input.fontFamily === "string") base.fontFamily = input.fontFamily;
     if (typeof input.fontStyle === "string") base.fontStyle = input.fontStyle;
+    else {
+      const weight = toNumber(input.fontWeight);
+      if (weight != null) {
+        if (weight >= 700) base.fontStyle = "Bold";
+        else if (weight >= 600) base.fontStyle = "Semibold";
+        else if (weight >= 500) base.fontStyle = "Medium";
+        else base.fontStyle = "Regular";
+      }
+    }
     const fontSize = toNumber(input.fontSize);
     if (fontSize != null) base.fontSize = fontSize;
     if (input.fill) base.fill = input.fill;
+    else if (input.color) base.fill = input.color;
     if (typeof input.alignHorizontal === "string") base.alignHorizontal = input.alignHorizontal;
+    else if (typeof input.textAlign === "string") {
+      const map: Record<string, "LEFT" | "CENTER" | "RIGHT" | "JUSTIFIED"> = {
+        left: "LEFT",
+        center: "CENTER",
+        right: "RIGHT",
+        justified: "JUSTIFIED"
+      };
+      const normalized = map[input.textAlign.toLowerCase()];
+      if (normalized) base.alignHorizontal = normalized;
+    }
     return base;
   }
 
@@ -103,6 +123,18 @@ function normalizeNode(input: any): any | null {
   }
 
   if (type === "image") {
+    if (typeof input.imageUrl !== "string" && typeof input.imageDataUrl !== "string") {
+      return {
+        type: "rect",
+        name: typeof input.name === "string" ? `${input.name} Placeholder` : "Image Placeholder",
+        x,
+        y,
+        width,
+        height,
+        cornerRadius: toNumber(input.cornerRadius) ?? 8,
+        fill: { r: 0.9, g: 0.92, b: 0.95, a: 1 }
+      };
+    }
     if (typeof input.imageUrl === "string") base.imageUrl = input.imageUrl;
     if (typeof input.imageDataUrl === "string") base.imageDataUrl = input.imageDataUrl;
     if (typeof input.scaleMode === "string") base.scaleMode = input.scaleMode;
